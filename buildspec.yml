@@ -4,19 +4,57 @@ phases:
   install:
     runtime-versions:
       nodejs: 14
+      java: corretto17
     commands:
-      - echo Installing NPM dependencies...
+      - echo "Installing NPM dependencies..."
       - npm install
+      - echo "Instalando OWASP Dependency-Check..."
+      - curl -sLO https://github.com/jeremylong/DependencyCheck/releases/download/v9.0.9/dependency-check-9.0.9-release.zip
+      - yum install -y unzip || apt-get install -y unzip
+      - unzip dependency-check-9.0.9-release.zip -d ./app
+      - echo "Verificando diretórios extraídos..."
+      - ls -R ./app
+      - echo "Dando permissão ao script..."
+      - chmod +x $(find ./app -type d -name "dependency-check*" | head -n 1)/bin/dependency-check.sh
+
   pre_build:
     commands:
-      - echo Pre-build phase
+      - echo "Pre-build phase"
+      - echo "Criando diretório reports..."
+      - mkdir -p reports
+
   build:
     commands:
-      - echo Build phase
+      - echo "Testando conexão manual com API da NVD usando a chave..."
+      - curl -H "apiKey:$NVD_API_KEY" "https://services.nvd.nist.gov/rest/json/cves/2.0" || echo "Erro ao acessar API manualmente"
+
+      - echo "Rodando análise de dependências no modo DEBUG..."
+      - echo "API Key configurada:${NVD_API_KEY:-'NÃO CONFIGURADA'}"
+      - env | grep NVD
+
+      - echo "Verificando versão do OWASP Dependency Check..."
+      - $(find . -type d -name "dependency-check*" | head -n 1)/bin/dependency-check.sh --version
+
+      - echo "Executando análise com logs detalhados..."
+      - DEPCHECK_DIR=$(find . -type d -name "dependency-check*" | head -n 1)
+      - $DEPCHECK_DIR/bin/dependency-check.sh \
+          --project "meu-projeto" \
+          --scan "." \
+          --format "HTML" \
+          --out "reports/" \
+          --nvdApiKey "$NVD_API_KEY" \
+          --nvdApiDelay 2000 \
+          --log "reports/dependency-check.log" \
+          --debug || echo "Falha na análise de dependências, verificar logs."
+
   post_build:
     commands:
-      - echo Build completed on `date`
+      - echo "Análise concluída! Salvando resultados..."
+      - echo "Conteúdo do diretório reports:"
+      - ls -lah reports/
+      - echo "Fazendo upload dos relatórios para o S3..."
+      - aws s3 cp reports/ s3://lab-devops-bucket-luizito --recursive || echo "Nenhum relatório encontrado para upload."
 
 artifacts:
   files:
-    - '**/*'           # Inclui todos os arquivos e subpastas recursivamente
+    - '**/*'
